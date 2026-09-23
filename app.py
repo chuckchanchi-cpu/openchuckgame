@@ -37,7 +37,9 @@ def load_spec():
 
 
 def call_llm(messages, base_url, api_key, model):
-    url = base_url.rstrip("/") + "/chat/completions"
+    url = base_url.rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url += "/chat/completions"
     payload = {
         "model": model,
         "messages": messages,
@@ -87,12 +89,16 @@ def boot_state():
 
 
 def api_config():
-    secrets = st.secrets.get("game", {})
-    return (
-        secrets.get("base_url", "https://api.silra.cn/v1"),
-        secrets.get("api_key", ""),
-        secrets.get("model", "deepseek-chat"),
-    )
+    """支援兩種 secrets 格式：
+    1) [game] section: base_url / api_key / model
+    2) flat (openedujustan 式): SILRA_API_URL / OPENAI_API_KEY / MODEL_NAME
+    """
+    s = st.secrets
+    g = s.get("game", {})
+    base = g.get("base_url") or s.get("SILRA_API_URL") or "https://api.silra.cn/v1"
+    key = g.get("api_key") or s.get("OPENAI_API_KEY") or ""
+    model = g.get("model") or s.get("MODEL_NAME") or "deepseek-chat"
+    return base, key, model
 
 
 def generate(messages, base_url, api_key, model):
