@@ -26,6 +26,15 @@ APPENDIX = """
 3. 【狀態】同【選項JSON】都唔算正文，玩家唔會見到。
 4. 選項照舊用 A./B./C./D. 開頭，一個選項一行。
 5. 玩家揀完之後，如果啱好係第 3 / 6 / 9... 個選擇，就係小結局 + 自動開下一章。
+
+【格式範例（每集結尾必須係呢個結構，最後四行順序不可亂）】
+【你點揀？】
+A. 選項一內容
+B. 選項二內容
+C. 選項三內容
+D. 自定：夠癲就得
+【選項JSON】{"A":"選項一內容","B":"選項二內容","C":"選項三內容","D":"自定：夠癲就得"}
+【狀態】靈力:10｜搞笑:5｜心動:0
 """
 
 STATUS_RE = re.compile(r"【狀態】\s*靈力\s*[:：]\s*(-?\d+)\s*｜?\s*搞笑\s*[:：]\s*(-?\d+)\s*｜?\s*心動\s*[:：]\s*(-?\d+)")
@@ -129,6 +138,19 @@ def generate(messages, base_url, api_key, model):
     content = call_llm(messages, base_url, api_key, model)
     stats = parse_status(content)
     opts = parse_options(content)
+    if len(opts) < 3:
+        # 引擎冇跟格式：推佢一次（唔會污染正式 history）
+        nudge = [{"role": "user", "content": "（系統提示：你頭先冇出齊【你點揀？】A./B./C./D. 選項或【狀態】行。"
+                                            "請嚴格跟足【技術規則】同【格式範例】完整重新出一次，"
+                                            "最後四行順序：選項列表 → 【選項JSON】 → 【狀態】。）"}]
+        try:
+            content2 = call_llm(messages + nudge, base_url, api_key, model)
+        except Exception:
+            content2 = ""
+        stats2 = parse_status(content2)
+        opts2 = parse_options(content2)
+        if len(opts2) >= 3:
+            return strip_meta(content2), stats2, opts2
     return strip_meta(content), stats, opts
 
 
@@ -248,7 +270,8 @@ if g["last_opts"]:
     letter = pick[0] if pick and pick[0] in "ABCD" else "D"
     custom = ""
     if letter == "D":
-        custom = st.text_input("✍️ 你自己諗到嘅癲嘢：", placeholder="夠癲就得……", key="custom_choice")
+        custom = st.text_input("✍️ 你自己諗到嘅癲嘢：", placeholder="夠癲就得……",
+                               key=f"custom_choice_{st.session_state.get('custom_n', 0)}")
         can_go = bool(custom.strip())
     else:
         can_go = True
@@ -257,13 +280,14 @@ if g["last_opts"]:
         try:
             make_choice(letter, text, base_url, api_key, model)
             if letter == "D":
-                st.session_state["custom_choice"] = ""
+                st.session_state["custom_n"] = st.session_state.get("custom_n", 0) + 1
             st.rerun()
         except Exception as e:
             st.error(f"引擎失靈：{e}")
 else:
     st.markdown("### 【你點揀？】")
-    free = st.text_input("✍️ 打 A/B/C/D 揀選項，或者直接打自定玩法：", placeholder="例如：A 或者 扯甩桃木劍啲毛", key="free_choice")
+    free = st.text_input("✍️ 打 A/B/C/D 揀選項，或者直接打自定玩法：", placeholder="例如：A 或者 扯甩桃木劍啲毛",
+                         key=f"free_choice_{st.session_state.get('free_n', 0)}")
     if st.button("🚀 出招", type="primary", disabled=not free.strip()):
         t = free.strip()
         letter = t.upper() if re.fullmatch(r"[A-Da-d]", t) else NUM2LET.get(t)
@@ -272,7 +296,7 @@ else:
                 make_choice(letter, "", base_url, api_key, model)
             else:
                 make_choice("D", t, base_url, api_key, model)
-            st.session_state["free_choice"] = ""
+            st.session_state["free_n"] = st.session_state.get("free_n", 0) + 1
             st.rerun()
         except Exception as e:
             st.error(f"引擎失靈：{e}")
