@@ -20,15 +20,20 @@ SPEC_FILE = os.path.join(HERE, "prompt.md")
 APPENDIX = """
 
 【技術規則（App 專用，玩家睇唔到）】
-1. 每次回覆最尾一定要加一行狀態，格式如下（數字 = 你心入面三個數值嘅當前值，要隨劇情變化）：
-【狀態】靈力:X｜搞笑:Y｜心動:Z
-2. 呢行係畀 App 追蹤用嘅，唔算正文，玩家唔會見到。
-3. 選項照舊用 A./B./C./D. 開頭，一個選項一行。
-4. 玩家揀完之後，如果啱好係第 3 / 6 / 9... 個選擇，就係小結局 + 自動開下一章。
+1. 每次回覆最尾一定要加一行狀態：【狀態】靈力:X｜搞笑:Y｜心動:Z（X/Y/Z = 三個數值當前值，要隨劇情變化）
+2. 喺狀態行之前，一定要加多一行（App 用，玩家睇唔到）：【選項JSON】{"A":"選項A內容","B":"選項B內容","C":"選項C內容","D":"選項D內容"}
+   內容要同【你點揀？】嘅 A./B./C./D. 選項完全一致。
+3. 【狀態】同【選項JSON】都唔算正文，玩家唔會見到。
+4. 選項照舊用 A./B./C./D. 開頭，一個選項一行。
+5. 玩家揀完之後，如果啱好係第 3 / 6 / 9... 個選擇，就係小結局 + 自動開下一章。
 """
 
 STATUS_RE = re.compile(r"【狀態】\s*靈力\s*[:：]\s*(-?\d+)\s*｜?\s*搞笑\s*[:：]\s*(-?\d+)\s*｜?\s*心動\s*[:：]\s*(-?\d+)")
-OPT_RE = re.compile(r"^([ABCD])[.、．)）]\s*(.+)$")
+OPT_JSON_RE = re.compile(r"【選項JSON】\s*(\{.*?\})(?=\s*【狀態】|\s*$)", re.S)
+OPT_RE = re.compile(r"^(?:選項)?\s*([A-Da-d１-４1-4])\s*[.、．。)）:：〉>」]\s*(.+)$", re.M)
+NUM2LET = {"1": "A", "2": "B", "3": "C", "4": "D",
+          "１": "A", "２": "B", "３": "C", "４": "D",
+          "Ａ": "A", "Ｂ": "B", "Ｃ": "C", "Ｄ": "D"}
 
 
 def load_spec():
@@ -65,15 +70,33 @@ def parse_status(text):
 
 
 def parse_options(text):
+    """選項 parse：先試【選項JSON】block，失敗先試寬鬆嘅 A./B./C./D. 行格式。"""
+    m = OPT_JSON_RE.search(text)
+    if m:
+        try:
+            d = json.loads(m.group(1))
+            out = {}
+            for k in "ABCD":
+                v = d.get(k) or d.get(k.lower())
+                if v:
+                    out[k] = str(v).strip()
+            if len(out) >= 3:
+                return out
+        except Exception:
+            pass
     opts = {}
     for m in OPT_RE.finditer(text):
-        if m.group(1) not in opts:
-            opts[m.group(1)] = m.group(2).strip()
+        raw = m.group(1)
+        letter = NUM2LET.get(raw.upper(), raw.upper())
+        if letter in "ABCD" and letter not in opts:
+            opts[letter] = m.group(2).strip()
     return opts
 
 
-def strip_status(text):
-    return STATUS_RE.sub("", text).strip()
+def strip_meta(text):
+    text = STATUS_RE.sub("", text)
+    text = re.sub(r"【選項JSON】\s*\{.*?\}(?:\n|$)", "", text, flags=re.S)
+    return text.strip()
 
 
 def boot_state():
@@ -106,7 +129,7 @@ def generate(messages, base_url, api_key, model):
     content = call_llm(messages, base_url, api_key, model)
     stats = parse_status(content)
     opts = parse_options(content)
-    return strip_status(content), stats, opts
+    return strip_meta(content), stats, opts
 
 
 def start_game(name, occupation, base_url, api_key, model):
@@ -138,7 +161,7 @@ def start_game(name, occupation, base_url, api_key, model):
 
 def make_choice(letter, text, base_url, api_key, model):
     g = st.session_state["game"]
-    g["history"].append({"role": "user", "content": f"我揀 {letter}：{text}"})
+    g["history"].append({"role": "user", "content": f"我揀 {letter}" + (f"：{text}" if text else "")})
     g["choices"] += 1
     g["busy"] = True
     try:
@@ -222,10 +245,10 @@ if g["last_opts"]:
     labels = {k: f"{k}. {v}" for k, v in g["last_opts"].items()}
     order = [k for k in "ABCD" if k in labels]
     pick = st.radio("揀一個，或者自己作：", [labels[k] for k in order], label_visibility="collapsed")
-    letter = pick[0]
+    letter = pick[0] if pick and pick[0] in "ABCD" else "D"
     custom = ""
     if letter == "D":
-        custom = st.text_input("✍️ 你自己諗到嘅癲嘢：", placeholder="夠癲就得……")
+        custom = st.text_input("✍️ 你自己諗到嘅癲嘢：", placeholder="夠癲就得……", key="custom_choice")
         can_go = bool(custom.strip())
     else:
         can_go = True
@@ -233,15 +256,23 @@ if g["last_opts"]:
         text = custom.strip() if letter == "D" else labels[letter][3:]
         try:
             make_choice(letter, text, base_url, api_key, model)
+            if letter == "D":
+                st.session_state["custom_choice"] = ""
             st.rerun()
         except Exception as e:
             st.error(f"引擎失靈：{e}")
 else:
     st.markdown("### 【你點揀？】")
-    free = st.text_input("✍️ 直接打你嘅選擇（例如：A）或者自定玩法：", placeholder="夠癲就得……")
+    free = st.text_input("✍️ 打 A/B/C/D 揀選項，或者直接打自定玩法：", placeholder="例如：A 或者 扯甩桃木劍啲毛", key="free_choice")
     if st.button("🚀 出招", type="primary", disabled=not free.strip()):
+        t = free.strip()
+        letter = t.upper() if re.fullmatch(r"[A-Da-d]", t) else NUM2LET.get(t)
         try:
-            make_choice("D", free.strip(), base_url, api_key, model)
+            if letter in "ABCD":
+                make_choice(letter, "", base_url, api_key, model)
+            else:
+                make_choice("D", t, base_url, api_key, model)
+            st.session_state["free_choice"] = ""
             st.rerun()
         except Exception as e:
             st.error(f"引擎失靈：{e}")
